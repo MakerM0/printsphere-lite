@@ -4,6 +4,11 @@ PrintSphere Lite 是一款基于 ESP8266EX 和 240x240 ST7789 屏幕的 Bambu �
 
 设备通过 WiFi 连接 Bambu 云 MQTT，实时显示打印机状态。配置完成后，ESP 会独立联网刷新数据，电脑端工具只在首次配置、重新登录账号、切换打印机或更新配置时使用。
 
+## 修改
+
+在原版基础上增加了时钟页面，打印机空闲的时候自动切换，时钟字体使用了[此仓库](https://github.com/chuxin520922/SmallDesktopDisplay/tree/main/2.Firmware/%E6%BA%90%E4%BB%A3%E7%A0%81/SD%E7%B3%BB%E5%88%97%E6%BA%90%E4%BB%A3%E7%A0%81-1.2%E7%89%88%E6%9C%AC/SmallDesktopDisplay)的字体
+
+
 ## 功能
 
 - 显示打印机名称、打印状态、进度百分比和边框进度条

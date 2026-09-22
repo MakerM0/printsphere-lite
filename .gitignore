@@ -28,3 +28,5 @@ release/
 Thumbs.db
 .DS_Store
 desktop.ini
+compile_commands.json
+/ref

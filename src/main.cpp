@@ -10,28 +10,25 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <TJpg_Decoder.h>
+#include "font_number.h"
+#include "clock_ui.h"
 #include "config.h"
 
 TFT_eSPI tft;
 WiFiServer apiServer(ESP_CONFIG_PORT);
 BearSSL::WiFiClientSecure mqttNet;
 
+// TJpgDec callback — decodes JPG digit bitmaps straight to TFT
+bool tft_output_jpg(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (y >= tft.height()) return false;
+  tft.pushImage(x, y, w, h, bitmap);
+  return true;
+}
+
 #define LCD_BL_PIN 5
 
 const char* FIRMWARE_VERSION = "firmware-v0.4.70-dual-nozzle-fit";
-
-#define BG_BLACK  0x0000
-#define C_RING    0x07E0
-#define C_TRACK   0x2104
-#define C_TEXT    0xFFFF
-#define C_DIM     0x8410
-#define C_CYAN    0x07FF
-#define C_ORANGE  0xFD20
-#define C_BLUE    0x5D1F
-#define C_RED     0xF800
-#define C_PANEL   0x3B6D
-#define C_PANEL2  0x2A6B
-#define C_PANEL3  0x4C10
 
 #define FRAME_X      4
 #define FRAME_Y      4
@@ -70,24 +67,6 @@ const char CN_CHAM[] PROGMEM = "0000000000000000000000300c0000007806ff8000fc02c1
 const char CN_PROGRESS[] PROGMEM = "0000000000000000000004330038000c330fffe006330c000007ffccc30000330dffc000330cc3001e330cc30006330cff0006ffec000006730dff8006630cc38006e30c770006230c3e000f001c7e0009ffd8e78008000b00c000000000000000000000000000000000000000000000000000"; // 39x23
 const char CN_TIME[] PROGMEM = "0000000000000000000000000000000000000000000000001fc2038000613f80031a0781f06181803ffa1ce1b7f78180031a3871b06601800bba7ff9b466fd803bda0301fe66cd800bba7ff9b666fd803bfa0301b366cd80079a1361b266fd801b623339b066c18013026309f0660180030e0f01b3c60f8000000000000000000000000000000000000000000000000000000000000000000000000000000000"; // 63x20
 const char CN_ETA[] PROGMEM = "000000000000000000000000000000000000000000003efe23006000d000c67e00063063007000d9f0c3020016fc7ff7ff3ffd3feb02001cc4e3060330c130c802003ff4e300003fc934c9f2000af5e303fe32d9fcc912000af5efe000325136c9f2000af46c67ffb27136c9120008f46c6098326933c9f20008786c6199beed30c9020008cc6fe319e1adf0c8060039846c661f211937881e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"; // 85x19
-
-struct PrinterState {
-  float progress = -1;
-  float nozzleTemp = -1;
-  float leftNozzleTemp = -1;
-  float rightNozzleTemp = -1;
-  float bedTemp = -1;
-  float chamberTemp = -1;
-  int remainingMin = -1;
-  int currentLayer = -1;
-  int totalLayers = -1;
-  String status = "prepare";
-  String displayName = "";
-  String model = "";
-  String serial = "";
-  bool online = true;
-  bool dualNozzle = false;
-};
 
 struct StoredConfig {
   String wifiSsid = WIFI_SSID;
@@ -157,6 +136,8 @@ String pendingHttpConfigBody;
 bool pendingHttpConfig = false;
 bool printerStatusReceived = false;
 uint8_t appliedBrightness = 0;
+
+Number digitPainter;  // shared with clock_ui.cpp
 
 const unsigned long DUAL_NOZZLE_SWITCH_MS = 3000;
 
@@ -368,7 +349,7 @@ void wifiConnect() {
     return;
   }
   WiFi.mode(WIFI_STA);
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.setSleepMode(WIFI_MODEM_SLEEP);
   WiFi.begin(stored.wifiSsid.c_str(), stored.wifiPassword.c_str());
   for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; ++i) delay(500);
   if (WiFi.status() == WL_CONNECTED) {
@@ -2106,6 +2087,9 @@ void setup() {
   tft.begin();
   tft.invertDisplay(1);
   tft.setRotation(0);
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(tft_output_jpg);
   pinMode(LCD_BL_PIN, OUTPUT);
   analogWriteRange(1023);
   analogWriteFreq(1000);
@@ -2195,11 +2179,38 @@ void loop() {
     displayDirty = true;
   }
 
+  // Detect clock-mode transitions
+  bool wantClock = shouldShowClock();
+  if (wantClock != clockMode) {
+    clockMode = wantClock;
+    cache.baseDrawn = false;
+    cache.offlineDrawn = false;
+    resetClockState();  // resets clockBaseDrawn + all per-digit trackers
+    displayDirty = true;
+  }
+
+  // Clock needs redraw every second to tick seconds
+  static unsigned long lastClockTickMs = 0;
+  if (clockMode && now - lastClockTickMs >= 1000) {
+    lastClockTickMs = now;
+    displayDirty = true;
+  }
+
   if (displayDirty && now - lastDisplay >= DISPLAY_REFRESH) {
     displayDirty = false;
     lastDisplay = now;
-    if (pr.online) renderDisplay();
-    else renderOffline();
+    if (clockMode) {
+      static String lastClockStatus;
+      if (pr.status != lastClockStatus) {
+        lastClockStatus = pr.status;
+        clockBaseDrawn = false;  // force full redraw to update bottom hint
+      }
+      renderClock();
+    } else if (pr.online) {
+      renderDisplay();
+    } else {
+      renderOffline();
+    }
   }
 
   delay(10);
